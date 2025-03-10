@@ -35,16 +35,20 @@ func NedxDateEndpoint(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(nextDate))
 }
 
-func AddTaskEndpoint(w http.ResponseWriter, r *http.Request) {
+func TaskEndpoint(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "POST":
-		AddTaskEndpointPost(w, r)
+		AddTaskEndpoint(w, r)
+	case "GET":
+		GetTaskEndpoint(w, r)
+	case "PUT":
+		UpdateTask(w, r)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
-func AddTaskEndpointPost(w http.ResponseWriter, r *http.Request) {
+func AddTaskEndpoint(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	body, err := io.ReadAll(r.Body)
@@ -61,49 +65,55 @@ func AddTaskEndpointPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	taskTitle := task.Title
-	var taskDate string
-	taskRepeat := task.Repeat
-	taskComment := task.Comment
-
-	if task.Title == "" {
-		returnError(w, "не заполнено поле title")
+	taskToSave, strErr := ValidateTask(task)
+	if strErr != "" {
+		returnError(w, strErr)
 		return
 	}
 
-	today := time.Now().Format("20060102")
+	// taskTitle := task.Title
+	// var taskDate string
+	// taskRepeat := task.Repeat
+	// taskComment := task.Comment
 
-	var eventDateString string
-	if task.Date == "" {
-		eventDateString = today
-	} else {
-		eventDateString = task.Date
-	}
+	// if task.Title == "" {
+	// 	returnError(w, "не заполнено поле title")
+	// 	return
+	// }
 
-	if taskRepeat == "" {
-		if today > eventDateString {
-			taskDate = today
-		} else {
-			taskDate = eventDateString
-		}
-	} else {
-		taskDate, err = NextDate(time.Now(), eventDateString, taskRepeat)
-		if err != nil {
-			returnError(w, err.Error())
-			return
-		}
-	}
+	// today := time.Now().Format("20060102")
 
-	_, err = time.Parse("20060102", eventDateString)
-	if err != nil {
-		returnError(w, err.Error())
-		return
-	}
+	// var eventDateString string
+	// if task.Date == "" {
+	// 	eventDateString = today
+	// } else {
+	// 	eventDateString = task.Date
+	// }
+
+	// if taskRepeat == "" {
+	// 	if today > eventDateString {
+	// 		taskDate = today
+	// 	} else {
+	// 		taskDate = eventDateString
+	// 	}
+	// } else {
+	// 	taskDate, err = NextDate(time.Now(), eventDateString, taskRepeat)
+	// 	if err != nil {
+	// 		returnError(w, err.Error())
+	// 		return
+	// 	}
+	// }
+
+	// _, err = time.Parse("20060102", eventDateString)
+	// if err != nil {
+	// 	returnError(w, err.Error())
+	// 	return
+	// }
 
 	db := GetDB()
 	sqlResult, err := db.Exec(
 		`INSERT INTO scheduler (date, repeat, title, comment) VALUES (?, ?, ?, ?)`,
-		taskDate, taskRepeat, taskTitle, taskComment,
+		taskToSave.Date, taskToSave.Repeat, taskToSave.Title, taskToSave.Comment,
 	)
 	if err != nil {
 		returnError(w, err.Error())
@@ -123,7 +133,104 @@ func AddTaskEndpointPost(w http.ResponseWriter, r *http.Request) {
 	w.Write(jsonResponse)
 }
 
-func GetTasks(w http.ResponseWriter, r *http.Request) {
+func GetTaskEndpoint(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	id := r.FormValue("id")
+
+	if id == "" {
+		returnError(w, "Не указан идентификатор")
+		return
+	}
+
+	db := GetDB()
+	rows, err := db.Query(`SELECT id, title, date, repeat, comment
+		FROM scheduler
+		WHERE id=?;`, id)
+	if err != nil {
+		returnError(w, err.Error())
+		return
+	}
+
+	defer rows.Close()
+	ok := rows.Next()
+	if ok {
+		var task TaskWithId
+		if err := rows.Scan(&task.Id, &task.Title, &task.Date, &task.Repeat, &task.Comment); err != nil {
+			returnError(w, err.Error())
+			return
+		}
+
+		resp, err := json.Marshal(task)
+		if err != nil {
+			returnError(w, err.Error())
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write(resp)
+		return
+	}
+
+	returnError(w, "Задача не найдена")
+}
+
+func UpdateTask(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	body, err := io.ReadAll(r.Body)
+
+	if err != nil {
+		returnError(w, err.Error())
+		return
+	}
+
+	var taskWithId TaskWithId
+	err = json.Unmarshal(body, &taskWithId)
+	if err != nil {
+		returnError(w, err.Error())
+		return
+	}
+
+	task := Task{Title: taskWithId.Title, Date: taskWithId.Date, Repeat: taskWithId.Repeat, Comment: taskWithId.Comment}
+	id := taskWithId.Id
+	taskToSave, strErr := ValidateTask(task)
+	if strErr != "" {
+		returnError(w, strErr)
+		return
+	}
+
+	db := GetDB()
+
+	updateQuery := `
+ UPDATE scheduler
+ SET date = ?, repeat = ?, title = ?, comment = ?
+ WHERE id = ?`
+
+	result, err := db.Exec(
+		updateQuery,
+		taskToSave.Date, taskToSave.Repeat, taskToSave.Title, taskToSave.Comment, id,
+	)
+	if err != nil {
+		returnError(w, err.Error())
+		return
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		returnError(w, err.Error())
+		return
+	}
+	if rowsAffected == 0 {
+		returnError(w, "Задача не найдена")
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("{}"))
+}
+
+func GetTaskskEndpoint(w http.ResponseWriter, r *http.Request) {
 	var response TasksResponse
 
 	db := GetDB()
@@ -150,12 +257,12 @@ func GetTasks(w http.ResponseWriter, r *http.Request) {
 		resp = []byte("{ \"tasks\": [] }")
 	} else {
 		resp, err = json.Marshal(response)
+		if err != nil {
+			returnError(w, err.Error())
+			return
+		}
 	}
 
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(resp)

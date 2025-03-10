@@ -24,8 +24,8 @@ func main() {
 
 	http.Handle("/", http.FileServer(http.Dir("../web")))
 	http.Handle("/api/nextdate", http.HandlerFunc(NedxDateEndpoint))
-	http.Handle("/api/task", http.HandlerFunc(AddTaskEndpoint))
-	http.Handle("/api/tasks", http.HandlerFunc(GetTasks))
+	http.Handle("/api/task", http.HandlerFunc(TaskEndpoint))
+	http.Handle("/api/tasks", http.HandlerFunc(GetTaskskEndpoint))
 
 	err := http.ListenAndServe(":"+port, nil)
 	if err != nil {

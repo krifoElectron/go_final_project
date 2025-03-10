@@ -53,3 +53,44 @@ func NextDate(nowArg time.Time, eventDateString string, repeat string) (string, 
 	err = errors.New("неверный формат repeat")
 	return "", err
 }
+
+func ValidateTask(task Task) (*Task, string) {
+	taskTitle := task.Title
+	var taskDate string
+	taskRepeat := task.Repeat
+	taskComment := task.Comment
+
+	if task.Title == "" {
+		return nil, "не заполнено поле title"
+	}
+
+	today := time.Now().Format("20060102")
+
+	var eventDateString string
+	if task.Date == "" {
+		eventDateString = today
+	} else {
+		eventDateString = task.Date
+	}
+
+	var err error
+	if taskRepeat == "" {
+		if today > eventDateString {
+			taskDate = today
+		} else {
+			taskDate = eventDateString
+		}
+	} else {
+		taskDate, err = NextDate(time.Now(), eventDateString, taskRepeat)
+		if err != nil {
+			return nil, err.Error()
+		}
+	}
+
+	_, err = time.Parse("20060102", eventDateString)
+	if err != nil {
+		return nil, err.Error()
+	}
+
+	return &Task{Title: taskTitle, Date: taskDate, Repeat: taskRepeat, Comment: taskComment}, ""
+}
