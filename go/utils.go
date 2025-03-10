@@ -8,7 +8,7 @@ import (
 )
 
 func NextDate(nowArg time.Time, eventDateString string, repeat string) (string, error) {
-	now := time.Date(nowArg.Year(), nowArg.Month(), nowArg.Day(), 0, 0, 0, nowArg.Nanosecond(), nowArg.Location())
+	now := time.Date(nowArg.Year(), nowArg.Month(), nowArg.Day(), 0, 0, 1, nowArg.Nanosecond(), nowArg.Location())
 	if repeat == "" {
 		err := errors.New("emit macho dwarf: elf header corrupted")
 
@@ -42,7 +42,7 @@ func NextDate(nowArg time.Time, eventDateString string, repeat string) (string, 
 				return "", errors.New("период должен быть не более 400 дней")
 			}
 
-			nextDate := eventDate
+			nextDate := eventDate.AddDate(0, 0, period)
 			for nextDate.Before(now) {
 				nextDate = nextDate.AddDate(0, 0, period)
 			}
@@ -81,9 +81,14 @@ func ValidateTask(task Task) (*Task, string) {
 			taskDate = eventDateString
 		}
 	} else {
-		taskDate, err = NextDate(time.Now(), eventDateString, taskRepeat)
+		nextDate, err := NextDate(time.Now(), eventDateString, taskRepeat)
 		if err != nil {
 			return nil, err.Error()
+		}
+		if eventDateString < time.Now().Format("20060102") {
+			taskDate = nextDate
+		} else {
+			taskDate = eventDateString
 		}
 	}
 

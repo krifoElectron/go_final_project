@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -16,6 +17,10 @@ func returnError(w http.ResponseWriter, stringErr string) {
 }
 
 func NedxDateEndpoint(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
 	now := r.FormValue("now")
 	date := r.FormValue("date")
 	repeat := r.FormValue("repeat")
@@ -43,14 +48,14 @@ func TaskEndpoint(w http.ResponseWriter, r *http.Request) {
 		GetTaskEndpoint(w, r)
 	case "PUT":
 		UpdateTask(w, r)
+	case "DELETE":
+		DeleteTaskEndpoint(w, r)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
 func AddTaskEndpoint(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	body, err := io.ReadAll(r.Body)
 
 	if err != nil {
@@ -71,45 +76,6 @@ func AddTaskEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// taskTitle := task.Title
-	// var taskDate string
-	// taskRepeat := task.Repeat
-	// taskComment := task.Comment
-
-	// if task.Title == "" {
-	// 	returnError(w, "не заполнено поле title")
-	// 	return
-	// }
-
-	// today := time.Now().Format("20060102")
-
-	// var eventDateString string
-	// if task.Date == "" {
-	// 	eventDateString = today
-	// } else {
-	// 	eventDateString = task.Date
-	// }
-
-	// if taskRepeat == "" {
-	// 	if today > eventDateString {
-	// 		taskDate = today
-	// 	} else {
-	// 		taskDate = eventDateString
-	// 	}
-	// } else {
-	// 	taskDate, err = NextDate(time.Now(), eventDateString, taskRepeat)
-	// 	if err != nil {
-	// 		returnError(w, err.Error())
-	// 		return
-	// 	}
-	// }
-
-	// _, err = time.Parse("20060102", eventDateString)
-	// if err != nil {
-	// 	returnError(w, err.Error())
-	// 	return
-	// }
-
 	db := GetDB()
 	sqlResult, err := db.Exec(
 		`INSERT INTO scheduler (date, repeat, title, comment) VALUES (?, ?, ?, ?)`,
@@ -128,6 +94,7 @@ func AddTaskEndpoint(w http.ResponseWriter, r *http.Request) {
 		Id: strconv.FormatInt(id, 10),
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	jsonResponse, _ := json.Marshal(response)
 	w.Write(jsonResponse)
@@ -203,9 +170,9 @@ func UpdateTask(w http.ResponseWriter, r *http.Request) {
 	db := GetDB()
 
 	updateQuery := `
- UPDATE scheduler
- SET date = ?, repeat = ?, title = ?, comment = ?
- WHERE id = ?`
+		UPDATE scheduler
+		SET date = ?, repeat = ?, title = ?, comment = ?
+		WHERE id = ?`
 
 	result, err := db.Exec(
 		updateQuery,
@@ -230,7 +197,12 @@ func UpdateTask(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("{}"))
 }
 
-func GetTaskskEndpoint(w http.ResponseWriter, r *http.Request) {
+func GetTasksEndpoint(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
 	var response TasksResponse
 
 	db := GetDB()
@@ -266,4 +238,120 @@ func GetTaskskEndpoint(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(resp)
+}
+
+func DoneEndpoint(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.FormValue("id")
+
+	if id == "" {
+		returnError(w, "Не указан идентификатор")
+		return
+	}
+
+	db := GetDB()
+	rows, err := db.Query(`SELECT id, title, date, repeat, comment
+		FROM scheduler
+		WHERE id=?;`, id)
+	if err != nil {
+		returnError(w, err.Error())
+		return
+	}
+
+	var task TaskWithId
+
+	ok := rows.Next()
+	if ok {
+		if err := rows.Scan(&task.Id, &task.Title, &task.Date, &task.Repeat, &task.Comment); err != nil {
+			returnError(w, err.Error())
+			return
+		}
+	} else {
+		returnError(w, "Задача не найдена")
+		return
+	}
+	rows.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if task.Repeat == "" {
+		doneQuery := `
+			DELETE FROM scheduler
+			WHERE id=?`
+
+		_, err := db.Exec(doneQuery, id)
+		if err != nil {
+			returnError(w, err.Error())
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("{}"))
+		return
+	}
+
+	updateQuery := `
+		UPDATE scheduler
+		SET date = ?
+		WHERE id = ?`
+
+	// считаем, что тут не может быть ошибки, поскольку данные в БД уже валидны
+	nextDate, _ := NextDate(time.Now(), task.Date, task.Repeat)
+	fmt.Println("nextDate", nextDate)
+	_, err = db.Exec(
+		updateQuery,
+		nextDate,
+		id,
+	)
+	if err != nil {
+		returnError(w, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("{}"))
+}
+
+func DeleteTaskEndpoint(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "DELETE" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.FormValue("id")
+
+	if id == "" {
+		returnError(w, "Не указан идентификатор")
+		return
+	}
+
+	db := GetDB()
+
+	deleteQuery := `
+		DELETE FROM scheduler
+		WHERE id=?`
+
+	sqlResult, err := db.Exec(deleteQuery, id)
+	if err != nil {
+		returnError(w, err.Error())
+		return
+	}
+
+	rowsAffected, err := sqlResult.RowsAffected()
+	if err != nil {
+		returnError(w, err.Error())
+		return
+	}
+	if rowsAffected == 0 {
+		returnError(w, "Задача не найдена")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("{}"))
 }
