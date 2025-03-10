@@ -8,9 +8,19 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+func GetDB() *sql.DB {
+	db, err := sql.Open("sqlite3", DB_FILE_PATH)
+
+	if err != nil {
+		log.Fatal(err)
+		return nil
+	}
+
+	return db
+}
+
 func CheckAndCreateDB() {
-	dbFilePath := "../scheduler.db"
-	_, err := os.Stat(dbFilePath)
+	_, err := os.Stat(DB_FILE_PATH)
 
 	var install bool
 	if err != nil {
@@ -20,10 +30,7 @@ func CheckAndCreateDB() {
 	// sql-запрос с CREATE TABLE и CREATE INDEX
 
 	if install {
-		db, err := sql.Open("sqlite3", dbFilePath)
-		if err != nil {
-			log.Fatal(err)
-		}
+		db := GetDB()
 		defer db.Close()
 		createTable := `CREATE TABLE scheduler (
     		id INTEGER PRIMARY KEY AUTOINCREMENT,
