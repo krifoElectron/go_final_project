@@ -36,6 +36,15 @@ func NedxDateEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func AddTaskEndpoint(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "POST":
+		AddTaskEndpointPost(w, r)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func AddTaskEndpointPost(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	body, err := io.ReadAll(r.Body)
@@ -112,4 +121,42 @@ func AddTaskEndpoint(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	jsonResponse, _ := json.Marshal(response)
 	w.Write(jsonResponse)
+}
+
+func GetTasks(w http.ResponseWriter, r *http.Request) {
+	var response TasksResponse
+
+	db := GetDB()
+	rows, err := db.Query(`SELECT id, title, date, repeat, comment
+		FROM scheduler
+		LIMIT 20;`)
+	if err != nil {
+		returnError(w, err.Error())
+		return
+	}
+
+	defer rows.Close()
+	for rows.Next() {
+		var task TaskWithId
+		if err := rows.Scan(&task.Id, &task.Title, &task.Date, &task.Repeat, &task.Comment); err != nil {
+			returnError(w, err.Error())
+			return
+		}
+		response.Tasks = append(response.Tasks, task)
+	}
+
+	var resp []byte
+	if response.Tasks == nil {
+		resp = []byte("{ \"tasks\": [] }")
+	} else {
+		resp, err = json.Marshal(response)
+	}
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(resp)
 }

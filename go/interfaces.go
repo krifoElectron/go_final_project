@@ -14,3 +14,12 @@ type TaskResponse struct {
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
+
+type TaskWithId struct {
+	Task
+	Id string `json:"id"`
+}
+
+type TasksResponse struct {
+	Tasks []TaskWithId `json:"tasks"`
+}

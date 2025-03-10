@@ -25,10 +25,10 @@ func main() {
 	http.Handle("/", http.FileServer(http.Dir("../web")))
 	http.Handle("/api/nextdate", http.HandlerFunc(NedxDateEndpoint))
 	http.Handle("/api/task", http.HandlerFunc(AddTaskEndpoint))
+	http.Handle("/api/tasks", http.HandlerFunc(GetTasks))
 
 	err := http.ListenAndServe(":"+port, nil)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("Завершаем работу")
 }
