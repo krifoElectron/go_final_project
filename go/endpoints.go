@@ -9,14 +9,24 @@ import (
 	"time"
 )
 
+func RegisterRoutes(handlerContext *EndpointHandlersContext) {
+	rootDir := GetRootDirectory()
+	fmt.Println("Для проверки rootDir:", rootDir)
+
+	http.Handle("/", http.FileServer(http.Dir(rootDir+"/web")))
+	http.Handle("/api/nextdate", http.HandlerFunc(NextDateEndpoint))
+	http.Handle("/api/task", http.HandlerFunc(handlerContext.TaskEndpoint))
+	http.Handle("/api/tasks", http.HandlerFunc(handlerContext.GetTasksEndpoint))
+	http.Handle("/api/task/done", http.HandlerFunc(handlerContext.DoneEndpoint))
+}
+
 func returnError(w http.ResponseWriter, stringErr string) {
 	errResp := ErrorResponse{Error: stringErr}
 	errRespByte, _ := json.Marshal(errResp)
-	w.WriteHeader(http.StatusInternalServerError)
 	w.Write(errRespByte)
 }
 
-func NedxDateEndpoint(w http.ResponseWriter, r *http.Request) {
+func NextDateEndpoint(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -27,7 +37,8 @@ func NedxDateEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	nowDate, err := time.Parse("20060102", now)
 	if err != nil {
-		w.Write([]byte("Неверный формат now"))
+		w.WriteHeader(http.StatusBadRequest)
+		returnError(w, "Неверный формат now")
 		return
 	}
 
@@ -40,25 +51,26 @@ func NedxDateEndpoint(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(nextDate))
 }
 
-func TaskEndpoint(w http.ResponseWriter, r *http.Request) {
+func (hCtx *EndpointHandlersContext) TaskEndpoint(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "POST":
-		AddTaskEndpoint(w, r)
+		hCtx.AddTaskEndpoint(w, r)
 	case "GET":
-		GetTaskEndpoint(w, r)
+		hCtx.GetTaskEndpoint(w, r)
 	case "PUT":
-		UpdateTask(w, r)
+		hCtx.UpdateTask(w, r)
 	case "DELETE":
-		DeleteTaskEndpoint(w, r)
+		hCtx.DeleteTaskEndpoint(w, r)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }
 
-func AddTaskEndpoint(w http.ResponseWriter, r *http.Request) {
+func (hCtx *EndpointHandlersContext) AddTaskEndpoint(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 
 	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
 		returnError(w, err.Error())
 		return
 	}
@@ -66,28 +78,33 @@ func AddTaskEndpoint(w http.ResponseWriter, r *http.Request) {
 	var task Task
 	err = json.Unmarshal(body, &task)
 	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
 		returnError(w, err.Error())
 		return
 	}
 
 	taskToSave, strErr := ValidateTask(task)
 	if strErr != "" {
+		w.WriteHeader(http.StatusBadRequest)
 		returnError(w, strErr)
 		return
 	}
 
-	db := GetDB()
-	sqlResult, err := db.Exec(
+	sqlResult, err := hCtx.Db.Exec(
 		`INSERT INTO scheduler (date, repeat, title, comment) VALUES (?, ?, ?, ?)`,
 		taskToSave.Date, taskToSave.Repeat, taskToSave.Title, taskToSave.Comment,
 	)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		returnError(w, err.Error())
+		return
 	}
 
 	id, err := sqlResult.LastInsertId()
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		returnError(w, err.Error())
+		return
 	}
 
 	var response TaskResponse = TaskResponse{
@@ -95,41 +112,56 @@ func AddTaskEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	jsonResponse, err := json.Marshal(response)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		returnError(w, err.Error())
+	}
 	w.WriteHeader(http.StatusOK)
-	jsonResponse, _ := json.Marshal(response)
 	w.Write(jsonResponse)
 }
 
-func GetTaskEndpoint(w http.ResponseWriter, r *http.Request) {
+func (hCtx *EndpointHandlersContext) GetTaskEndpoint(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	id := r.FormValue("id")
 
 	if id == "" {
+		w.WriteHeader(http.StatusBadRequest)
 		returnError(w, "Не указан идентификатор")
 		return
 	}
 
-	db := GetDB()
-	rows, err := db.Query(`SELECT id, title, date, repeat, comment
+	rows, err := hCtx.Db.Query(`SELECT id, title, date, repeat, comment
 		FROM scheduler
 		WHERE id=?;`, id)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		returnError(w, err.Error())
 		return
 	}
 
 	defer rows.Close()
+	var resp []byte
 	ok := rows.Next()
 	if ok {
 		var task TaskWithId
 		if err := rows.Scan(&task.Id, &task.Title, &task.Date, &task.Repeat, &task.Comment); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
 			returnError(w, err.Error())
 			return
 		}
 
-		resp, err := json.Marshal(task)
+		resp, err = json.Marshal(task)
 		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			returnError(w, err.Error())
+			return
+		}
+
+		err = rows.Err()
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
 			returnError(w, err.Error())
 			return
 		}
@@ -139,15 +171,17 @@ func GetTaskEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.WriteHeader(http.StatusBadRequest)
 	returnError(w, "Задача не найдена")
 }
 
-func UpdateTask(w http.ResponseWriter, r *http.Request) {
+func (hCtx *EndpointHandlersContext) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	body, err := io.ReadAll(r.Body)
 
 	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
 		returnError(w, err.Error())
 		return
 	}
@@ -155,6 +189,7 @@ func UpdateTask(w http.ResponseWriter, r *http.Request) {
 	var taskWithId TaskWithId
 	err = json.Unmarshal(body, &taskWithId)
 	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
 		returnError(w, err.Error())
 		return
 	}
@@ -163,32 +198,34 @@ func UpdateTask(w http.ResponseWriter, r *http.Request) {
 	id := taskWithId.Id
 	taskToSave, strErr := ValidateTask(task)
 	if strErr != "" {
+		w.WriteHeader(http.StatusBadRequest)
 		returnError(w, strErr)
 		return
 	}
-
-	db := GetDB()
 
 	updateQuery := `
 		UPDATE scheduler
 		SET date = ?, repeat = ?, title = ?, comment = ?
 		WHERE id = ?`
 
-	result, err := db.Exec(
+	result, err := hCtx.Db.Exec(
 		updateQuery,
 		taskToSave.Date, taskToSave.Repeat, taskToSave.Title, taskToSave.Comment, id,
 	)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		returnError(w, err.Error())
 		return
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		returnError(w, err.Error())
 		return
 	}
 	if rowsAffected == 0 {
+		w.WriteHeader(http.StatusBadRequest)
 		returnError(w, "Задача не найдена")
 		return
 	}
@@ -197,7 +234,7 @@ func UpdateTask(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("{}"))
 }
 
-func GetTasksEndpoint(w http.ResponseWriter, r *http.Request) {
+func (hCtx *EndpointHandlersContext) GetTasksEndpoint(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -205,11 +242,12 @@ func GetTasksEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	var response TasksResponse
 
-	db := GetDB()
-	rows, err := db.Query(`SELECT id, title, date, repeat, comment
+	rows, err := hCtx.Db.Query(`SELECT id, title, date, repeat, comment
 		FROM scheduler
+		ORDER BY date ASC
 		LIMIT 20;`)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		returnError(w, err.Error())
 		return
 	}
@@ -218,10 +256,18 @@ func GetTasksEndpoint(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var task TaskWithId
 		if err := rows.Scan(&task.Id, &task.Title, &task.Date, &task.Repeat, &task.Comment); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
 			returnError(w, err.Error())
 			return
 		}
 		response.Tasks = append(response.Tasks, task)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		returnError(w, err.Error())
+		return
 	}
 
 	var resp []byte
@@ -230,6 +276,7 @@ func GetTasksEndpoint(w http.ResponseWriter, r *http.Request) {
 	} else {
 		resp, err = json.Marshal(response)
 		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
 			returnError(w, err.Error())
 			return
 		}
@@ -240,7 +287,7 @@ func GetTasksEndpoint(w http.ResponseWriter, r *http.Request) {
 	w.Write(resp)
 }
 
-func DoneEndpoint(w http.ResponseWriter, r *http.Request) {
+func (hCtx *EndpointHandlersContext) DoneEndpoint(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -249,15 +296,16 @@ func DoneEndpoint(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("id")
 
 	if id == "" {
-		returnError(w, "Не указан идентификатор")
+		w.WriteHeader(http.StatusBadRequest)
+		returnError(w, "не указан идентификатор")
 		return
 	}
 
-	db := GetDB()
-	rows, err := db.Query(`SELECT id, title, date, repeat, comment
+	rows, err := hCtx.Db.Query(`SELECT id, title, date, repeat, comment
 		FROM scheduler
 		WHERE id=?;`, id)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		returnError(w, err.Error())
 		return
 	}
@@ -267,11 +315,19 @@ func DoneEndpoint(w http.ResponseWriter, r *http.Request) {
 	ok := rows.Next()
 	if ok {
 		if err := rows.Scan(&task.Id, &task.Title, &task.Date, &task.Repeat, &task.Comment); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
 			returnError(w, err.Error())
 			return
 		}
 	} else {
+		w.WriteHeader(http.StatusBadRequest)
 		returnError(w, "Задача не найдена")
+		return
+	}
+	err = rows.Err()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		returnError(w, err.Error())
 		return
 	}
 	rows.Close()
@@ -283,8 +339,9 @@ func DoneEndpoint(w http.ResponseWriter, r *http.Request) {
 			DELETE FROM scheduler
 			WHERE id=?`
 
-		_, err := db.Exec(doneQuery, id)
+		_, err := hCtx.Db.Exec(doneQuery, id)
 		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
 			returnError(w, err.Error())
 			return
 		}
@@ -301,13 +358,14 @@ func DoneEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	// считаем, что тут не может быть ошибки, поскольку данные в БД уже валидны
 	nextDate, _ := NextDate(time.Now(), task.Date, task.Repeat)
-	fmt.Println("nextDate", nextDate)
-	_, err = db.Exec(
+
+	_, err = hCtx.Db.Exec(
 		updateQuery,
 		nextDate,
 		id,
 	)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		returnError(w, err.Error())
 		return
 	}
@@ -316,7 +374,7 @@ func DoneEndpoint(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("{}"))
 }
 
-func DeleteTaskEndpoint(w http.ResponseWriter, r *http.Request) {
+func (hCtx *EndpointHandlersContext) DeleteTaskEndpoint(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "DELETE" {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -325,28 +383,30 @@ func DeleteTaskEndpoint(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("id")
 
 	if id == "" {
-		returnError(w, "Не указан идентификатор")
+		w.WriteHeader(http.StatusBadRequest)
+		returnError(w, "не указан идентификатор")
 		return
 	}
-
-	db := GetDB()
 
 	deleteQuery := `
 		DELETE FROM scheduler
 		WHERE id=?`
 
-	sqlResult, err := db.Exec(deleteQuery, id)
+	sqlResult, err := hCtx.Db.Exec(deleteQuery, id)
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		returnError(w, err.Error())
 		return
 	}
 
 	rowsAffected, err := sqlResult.RowsAffected()
 	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		returnError(w, err.Error())
 		return
 	}
 	if rowsAffected == 0 {
+		w.WriteHeader(http.StatusBadRequest)
 		returnError(w, "Задача не найдена")
 		return
 	}

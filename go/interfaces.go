@@ -1,5 +1,11 @@
 package main
 
+import "database/sql"
+
+type EndpointHandlersContext struct {
+	Db *sql.DB
+}
+
 type Task struct {
 	Date    string `json:"date,omitempty"`
 	Title   string `json:"title"`

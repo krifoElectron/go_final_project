@@ -9,7 +9,9 @@ import (
 )
 
 func GetDB() *sql.DB {
-	db, err := sql.Open("sqlite3", DB_FILE_PATH)
+	rootDir := GetRootDirectory()
+
+	db, err := sql.Open("sqlite3", rootDir+"/"+DB_FILE_NAME)
 
 	if err != nil {
 		log.Fatal(err)
@@ -19,8 +21,10 @@ func GetDB() *sql.DB {
 	return db
 }
 
-func CheckAndCreateDB() {
-	_, err := os.Stat(DB_FILE_PATH)
+func CheckAndCreateDB() *sql.DB {
+	rootDir := GetRootDirectory()
+
+	_, err := os.Stat(rootDir + "/" + DB_FILE_NAME)
 
 	var install bool
 	if err != nil {
@@ -29,8 +33,9 @@ func CheckAndCreateDB() {
 	// если install равен true, после открытия БД требуется выполнить
 	// sql-запрос с CREATE TABLE и CREATE INDEX
 
+	db := GetDB()
+
 	if install {
-		db := GetDB()
 		defer db.Close()
 		createTable := `CREATE TABLE scheduler (
     		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,9 +47,12 @@ func CheckAndCreateDB() {
 
 			CREATE INDEX idx_date ON scheduler(date);
 		`
+
 		_, err = db.Exec(createTable)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
+
+	return db
 }

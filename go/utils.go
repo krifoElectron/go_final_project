@@ -1,11 +1,36 @@
 package main
 
 import (
+	"database/sql"
 	"errors"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 )
+
+func GetRootDirectory() string {
+	_, filePath, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("Could not get caller information")
+	}
+
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		panic(err)
+	}
+
+	rootDir := filepath.Dir(filepath.Dir(absPath))
+
+	return rootDir
+}
+
+func NewEndpointHandlersContext(db *sql.DB) *EndpointHandlersContext {
+	return &EndpointHandlersContext{
+		Db: db,
+	}
+}
 
 func NextDate(nowArg time.Time, eventDateString string, repeat string) (string, error) {
 	now := time.Date(nowArg.Year(), nowArg.Month(), nowArg.Day(), 0, 0, 1, nowArg.Nanosecond(), nowArg.Location())
